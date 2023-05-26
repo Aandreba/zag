@@ -1,0 +1,8 @@
+{
+  "deps": {
+    "rzig": {
+      "repo": "https://github.com/Aandreba/rzig",
+      "version": "master"
+    }
+  }
+}
