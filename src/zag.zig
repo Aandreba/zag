@@ -20,7 +20,7 @@ pub const ZagFile = struct {
             if (e != error.PathAlreadyExists) return e;
         };
 
-        const fs_dir = std.fs.cwd().openDir(dir, .{});
+        const fs_dir = try std.fs.cwd().openDir(dir, .{});
         var result = try self.alloc.alloc(std.build.Pkg, self.deps.count());
         errdefer self.alloc.free(result);
 
@@ -96,7 +96,7 @@ pub const ZagDep = struct {
     entry: ?[]const u8 = null,
 
     pub fn import(self: *const ZagDep, alloc: std.mem.Allocator, name: []const u8, dir: []const u8, fs_dir: std.fs.Dir) !std.build.Pkg {
-        const target_dir = fs_dir.openDir(name, .{}) catch |e| {
+        var target_dir_fs = fs_dir.openDir(name, .{}) catch |e| {
             // Clone repo
             if (e == error.FileNotFound) {
                 const argv = [_][]const u8{
@@ -123,6 +123,11 @@ pub const ZagDep = struct {
             }
             return e;
         };
+        target_dir_fs.close();
+
+        var target_dir = std.ArrayList(u8).init(alloc);
+        defer target_dir.deinit();
+        try std.fmt.format(target_dir.writer(), "{s}/{s}", .{ dir, name });
 
         // Checkout verion tag
         const argv = [_][]const u8{
@@ -130,10 +135,19 @@ pub const ZagDep = struct {
             "checkout",
             self.version_str,
         };
-        var clone_process = std.ChildProcess.init(&argv, alloc);
-        clone_process.cwd = dir;
+        var checkout_process = std.ChildProcess.init(&argv, alloc);
+        checkout_process.cwd = target_dir.items;
 
-        _ = target_dir;
+        switch (try checkout_process.spawnAndWait()) {
+            .Exited => |ex| if (ex == 0) {} else return error.Unexpected,
+            else => return error.Unexpected,
+        }
+
+        return std.build.Pkg{
+            .name = name,
+            .source = std.build.FileSource.relative(if (self.entry) |entry| entry else "src/main.zig"),
+            .dependencies = null,
+        };
     }
 
     pub fn parse(reader: *JsonReader) !ZagDep {
