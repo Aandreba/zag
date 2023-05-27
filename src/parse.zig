@@ -125,9 +125,9 @@ pub const ZagDep = struct {
         };
         target_dir_fs.close();
 
-        var target_dir = std.ArrayList(u8).init(alloc);
-        defer target_dir.deinit();
-        try std.fmt.format(target_dir.writer(), "{s}/{s}", .{ dir, name });
+        var target_path = std.ArrayList(u8).init(alloc);
+        defer target_path.deinit();
+        try std.fmt.format(target_path.writer(), "{s}/{s}", .{ dir, name });
 
         // Checkout verion tag
         const argv = [_][]const u8{
@@ -136,16 +136,19 @@ pub const ZagDep = struct {
             self.version_str,
         };
         var checkout_process = std.ChildProcess.init(&argv, alloc);
-        checkout_process.cwd = target_dir.items;
+        checkout_process.cwd = target_path.items;
 
         switch (try checkout_process.spawnAndWait()) {
             .Exited => |ex| if (ex == 0) {} else return error.Unexpected,
             else => return error.Unexpected,
         }
 
+        const relative_path = if (self.entry) |entry| entry else "src/main.zig";
+        try std.fmt.format(target_path.writer(), "{s}/{s}", .{ target_path.toOwnedSlice(), relative_path });
+
         return std.build.Pkg{
             .name = name,
-            .source = std.build.FileSource.relative(if (self.entry) |entry| entry else "src/main.zig"),
+            .source = std.build.FileSource.relative(target_path.toOwnedSlice()),
             .dependencies = null,
         };
     }
