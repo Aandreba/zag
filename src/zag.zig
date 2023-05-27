@@ -1,110 +1,172 @@
 const std = @import("std");
 const json = std.json;
 
-const MAX_DEPTH = 256;
+const JsonReader = @import("json.zig").Reader;
 pub const DepsMap = std.StringArrayHashMapUnmanaged(ZagDep);
+
+pub const ZagError = error{MissingField};
+const MAX_DEPTH = 256;
 
 /// Zag file
 pub const ZagFile = struct {
+    dir: ?[]const u8,
     deps: DepsMap = DepsMap{},
+    bytes: []const u8,
     alloc: std.mem.Allocator,
 
-    pub fn serialize(
-        comptime OutStream: type,
-        comptime max_depth: usize,
-        self: *const ZagFile,
-        stream: *json.WriteStream(OutStream, max_depth),
-    ) !void {
-        try stream.beginObject();
+    pub fn importDeps(self: *const ZagFile) ![]std.build.Pkg {
+        const dir = self.dir orelse "zag-modules";
+        std.fs.cwd().makeDir(dir) catch |e| {
+            if (e != error.PathAlreadyExists) return e;
+        };
 
-        try stream.objectField("deps");
-        try stream.beginObject();
+        const fs_dir = std.fs.cwd().openDir(dir, .{});
+        var result = try self.alloc.alloc(std.build.Pkg, self.deps.count());
+        errdefer self.alloc.free(result);
 
+        var i: usize = 0;
         var iter = self.deps.iterator();
         while (iter.next()) |entry| {
-            try stream.objectField(entry.key_ptr);
-            try entry.value_ptr.serialize(OutStream, max_depth, stream);
+            result[i] = try entry.value_ptr.import(self.alloc, entry.key_ptr.*, dir, fs_dir);
+            i += 1;
         }
-        try stream.endObject();
 
-        try stream.endObject();
+        return result;
+    }
+
+    pub fn parse(alloc: std.mem.Allocator, path: []const u8) !ZagFile {
+        const cwd = std.fs.cwd();
+
+        // Read file contents
+        const file = try cwd.readFileAlloc(alloc, path, std.math.maxInt(usize));
+        errdefer alloc.free(file);
+
+        var reader = JsonReader.init(json.TokenStream.init(file));
+        var deps = DepsMap{};
+        var dir: ?[]const u8 = null;
+
+        try reader.beginObject();
+        while (true) {
+            const peek = try reader.peekToken();
+            if (peek.* == .ObjectEnd) break;
+
+            const key = try reader.parseString();
+            if (std.mem.eql(u8, key, "dir")) {
+                dir = try reader.parseString();
+            } else if (std.mem.eql(u8, key, "deps")) {
+                deps = DepsMap{};
+                errdefer deps.deinit(alloc);
+
+                try reader.beginObject();
+                while (true) {
+                    const deps_peek = try reader.peekToken();
+                    if (deps_peek.* == .ObjectEnd) break;
+
+                    const name = try reader.parseString();
+                    const value = try ZagDep.parse(&reader);
+                    try deps.put(alloc, name, value);
+                }
+                try reader.endObject();
+            } else {
+                std.log.warn("Unknown field: '{s}'\n", .{key});
+            }
+        }
+        try reader.endObject();
+
+        return ZagFile{
+            .dir = dir,
+            .deps = deps,
+            .bytes = file,
+            .alloc = alloc,
+        };
     }
 
     pub fn deinit(self: ZagFile) void {
-        var iter = self.deps.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.*.deinit(self.alloc);
-        }
-
         var this = self;
         this.deps.deinit(self.alloc);
+        self.alloc.free(self.bytes);
     }
 };
 
 // Zag dependency
 pub const ZagDep = struct {
     repo: []const u8,
-    version: Version,
+    version: std.SemanticVersion,
+    version_str: []const u8,
     entry: ?[]const u8 = null,
 
-    pub fn serialize(
-        comptime OutStream: type,
-        comptime max_depth: usize,
-        self: *const ZagDep,
-        stream: *json.WriteStream(OutStream, max_depth),
-    ) !void {
-        try stream.beginObject();
+    pub fn import(self: *const ZagDep, alloc: std.mem.Allocator, name: []const u8, dir: []const u8, fs_dir: std.fs.Dir) !std.build.Pkg {
+        const target_dir = fs_dir.openDir(name, .{}) catch |e| {
+            // Clone repo
+            if (e == error.FileNotFound) {
+                const argv = [_][]const u8{
+                    "git",
+                    "clone",
+                    "--branch",
+                    self.version_str,
+                    self.repo,
+                    name,
+                };
+                var clone_process = std.ChildProcess.init(&argv, alloc);
+                clone_process.cwd = dir;
 
-        try stream.objectField("repo");
-        try stream.emitString(self.repo);
+                switch (try clone_process.spawnAndWait()) {
+                    .Exited => |ex| if (ex == 0) {} else return error.Unexpected,
+                    else => return error.Unexpected,
+                }
 
-        try stream.objectField("version");
-        try self.version.serialize(OutStream, max_depth, &self.version, stream);
-
-        if (self.entry) |entry| {
-            try stream.objectField("entry");
-            try stream.emitString(entry);
-        }
-
-        try stream.endObject();
-    }
-
-    pub fn deinit(self: ZagDep, alloc: std.mem.Allocator) void {
-        alloc.free(self.repo);
-        self.version.deinit(alloc);
-        if (self.entry) |entry| alloc.free(entry);
-    }
-};
-
-pub const Version = union(enum) {
-    version: std.SemanticVersion,
-    branch: []const u8,
-
-    pub fn serialize(
-        comptime OutStream: type,
-        comptime max_depth: usize,
-        self: *const Version,
-        stream: *json.WriteStream(OutStream, max_depth),
-    ) !void {
-        return switch (self) {
-            Version.version => |version| {
-                const result = std.ArrayList(u8).init(std.heap.page_allocator);
-                defer result.deinit();
-
-                try std.SemanticVersion.format(version, "", .{}, result.writer());
-                stream.emitString(result.items);
-            },
-            Version.branch => |branch| stream.emitString(branch),
+                return std.build.Pkg{
+                    .name = name,
+                    .source = std.build.FileSource.relative(if (self.entry) |entry| entry else "src/main.zig"),
+                    .dependencies = null,
+                };
+            }
+            return e;
         };
+
+        // Checkout verion tag
+        const argv = [_][]const u8{
+            "git",
+            "checkout",
+            self.version_str,
+        };
+        var clone_process = std.ChildProcess.init(&argv, alloc);
+        clone_process.cwd = dir;
+
+        _ = target_dir;
     }
 
-    pub fn deinit(self: Version, alloc: std.mem.Allocator) void {
-        switch (self) {
-            Version.version => |version| {
-                if (version.pre) |pre| alloc.free(pre);
-                if (version.build) |build| alloc.free(build);
-            },
-            Version.branch => |branch| alloc.free(branch),
+    pub fn parse(reader: *JsonReader) !ZagDep {
+        var repo: ?[]const u8 = null;
+        var version: ?std.SemanticVersion = null;
+        var version_str: ?[]const u8 = null;
+        var entry: ?[]const u8 = null;
+
+        try reader.beginObject();
+        while (true) {
+            const peek = try reader.peekToken();
+            if (peek.* == .ObjectEnd) break;
+
+            const key = try reader.parseString();
+            if (std.mem.eql(u8, key, "repo")) {
+                repo = try reader.parseString();
+            } else if (std.mem.eql(u8, key, "version")) {
+                const parsed_version = try reader.parseString();
+                version_str = parsed_version;
+                version = try std.SemanticVersion.parse(if (parsed_version[0] == 'v') parsed_version[1..] else parsed_version);
+            } else if (std.mem.eql(u8, key, "entry")) {
+                entry = try reader.parseString();
+            } else {
+                std.log.warn("Unknown field: '{s}'\n", .{key});
+            }
         }
+        try reader.endObject();
+
+        return ZagDep{
+            .repo = repo orelse return ZagError.MissingField,
+            .version = version orelse return ZagError.MissingField,
+            .version_str = version_str orelse return ZagError.MissingField,
+            .entry = entry,
+        };
     }
 };

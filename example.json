@@ -1,8 +1,8 @@
 {
   "deps": {
     "rzig": {
-      "repo": "https://github.com/Aandreba/rzig",
-      "version": "master"
+      "repo": "https://github.com/Aandreba/zigrc",
+      "version": "0.1.0"
     }
   }
 }
