@@ -96,6 +96,10 @@ pub const ZagDep = struct {
     entry: ?[]const u8 = null,
 
     pub fn import(self: *const ZagDep, alloc: std.mem.Allocator, name: []const u8, dir: []const u8, fs_dir: std.fs.Dir) !std.build.Pkg {
+        var target_path = std.ArrayList(u8).init(alloc);
+        defer target_path.deinit();
+        try std.fmt.format(target_path.writer(), "{s}/{s}", .{ dir, name });
+
         var target_dir_fs = fs_dir.openDir(name, .{}) catch |e| {
             // Clone repo
             if (e == error.FileNotFound) {
@@ -115,6 +119,9 @@ pub const ZagDep = struct {
                     else => return error.Unexpected,
                 }
 
+                const relative_path = if (self.entry) |entry| entry else "src/main.zig";
+                try std.fmt.format(target_path.writer(), "{s}/{s}", .{ target_path.toOwnedSlice(), relative_path });
+
                 return std.build.Pkg{
                     .name = name,
                     .source = std.build.FileSource.relative(if (self.entry) |entry| entry else "src/main.zig"),
@@ -124,10 +131,6 @@ pub const ZagDep = struct {
             return e;
         };
         target_dir_fs.close();
-
-        var target_path = std.ArrayList(u8).init(alloc);
-        defer target_path.deinit();
-        try std.fmt.format(target_path.writer(), "{s}/{s}", .{ dir, name });
 
         // Checkout verion tag
         const argv = [_][]const u8{
