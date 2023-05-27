@@ -9,7 +9,11 @@ pub fn processZag(b: anytype, file_path: ?[]const u8) !void {
     defer file.deinit();
 
     const deps = try file.importDeps();
-    defer file.alloc.free(deps);
+    defer {
+        for (deps) |dep| file.alloc.free(dep.source.path);
+        file.alloc.free(deps);
+    }
+
     for (deps) |pkg| {
         std.debug.print("Imported {s}\n", .{pkg.name});
         B.addPackage(b, pkg);
@@ -17,9 +21,12 @@ pub fn processZag(b: anytype, file_path: ?[]const u8) !void {
 }
 
 test "generate file" {
-    const file = try zag.ZagFile.parse(std.testing.allocator, "example.json");
+    const file = try zag.ZagFile.parse(std.testing.allocator, "zag.json");
     defer file.deinit();
 
     const deps = try file.importDeps();
-    defer file.alloc.free(deps);
+    defer {
+        for (deps) |dep| file.alloc.free(dep.source.path);
+        file.alloc.free(deps);
+    }
 }

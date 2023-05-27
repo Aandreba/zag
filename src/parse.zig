@@ -96,6 +96,7 @@ pub const ZagDep = struct {
     entry: ?[]const u8 = null,
 
     pub fn import(self: *const ZagDep, alloc: std.mem.Allocator, name: []const u8, dir: []const u8, fs_dir: std.fs.Dir) !std.build.Pkg {
+        // Path for the repo
         var target_path = std.ArrayList(u8).init(alloc);
         defer target_path.deinit();
         try std.fmt.format(target_path.writer(), "{s}/{s}", .{ dir, name });
@@ -112,6 +113,7 @@ pub const ZagDep = struct {
                     name,
                 };
                 var clone_process = std.ChildProcess.init(&argv, alloc);
+                clone_process.stdout_behavior = .Close;
                 clone_process.cwd = dir;
 
                 switch (try clone_process.spawnAndWait()) {
@@ -119,12 +121,13 @@ pub const ZagDep = struct {
                     else => return error.Unexpected,
                 }
 
+                // Entry point
                 const relative_path = if (self.entry) |entry| entry else "src/main.zig";
                 try std.fmt.format(target_path.writer(), "{s}/{s}", .{ target_path.toOwnedSlice(), relative_path });
 
                 return std.build.Pkg{
                     .name = name,
-                    .source = std.build.FileSource.relative(if (self.entry) |entry| entry else "src/main.zig"),
+                    .source = std.build.FileSource.relative(target_path.toOwnedSlice()),
                     .dependencies = null,
                 };
             }
@@ -139,6 +142,7 @@ pub const ZagDep = struct {
             self.version_str,
         };
         var checkout_process = std.ChildProcess.init(&argv, alloc);
+        checkout_process.stdout_behavior = .Close;
         checkout_process.cwd = target_path.items;
 
         switch (try checkout_process.spawnAndWait()) {

@@ -1,0 +1,8 @@
+{
+    "deps": {
+        "clap": {
+            "repo": "https://github.com/Hejsil/zig-clap",
+            "version": "0.6.0"
+        }
+    }
+}
