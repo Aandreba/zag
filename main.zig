@@ -10,7 +10,7 @@ pub fn processZag(b: anytype, file_path: ?[]const u8) !void {
 
     const deps = try file.importDeps();
     defer file.alloc.free(deps);
-    for (deps) |pkg| B.addPackage(b, pkg);
+    for (deps) |pkg| B.addPackage(b, B.dupePkg(b, pkg));
 }
 
 test "generate file" {
