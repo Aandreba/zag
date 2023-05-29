@@ -2,10 +2,14 @@ const std = @import("std");
 const zag = @import("src/parse.zig");
 const json = std.json;
 
-pub fn processZag(b: anytype, file_path: ?[]const u8) !void {
+pub fn processZag(b: anytype) !void {
+    return processZagWithFile(b, "zag.json");
+}
+
+pub fn processZagWithFile(b: anytype, file_path: []const u8) !void {
     const B: type = @typeInfo(@TypeOf(b)).Pointer.child;
 
-    const file = try zag.ZagFile.parse(std.heap.page_allocator, if (file_path) |f| f else "zag.json");
+    const file = try zag.ZagFile.parse(std.heap.page_allocator, file_path);
     defer file.deinit();
 
     const deps = try file.importDeps();
