@@ -20,7 +20,9 @@ pub const ZagFile = struct {
             if (e != error.PathAlreadyExists) return e;
         };
 
-        const fs_dir = try std.fs.cwd().openDir(dir, .{});
+        var fs_dir = try std.fs.cwd().openDir(dir, .{});
+        defer fs_dir.close();
+
         var result = try self.alloc.alloc(std.build.Pkg, self.deps.count());
         errdefer self.alloc.free(result);
 
@@ -97,7 +99,7 @@ pub const ZagDep = struct {
 
     pub fn import(self: *const ZagDep, alloc: std.mem.Allocator, name: []const u8, dir: []const u8, fs_dir: std.fs.Dir) !std.build.Pkg {
         // Path for the repo
-        var target_path = std.ArrayList(u8).init(alloc);
+        var target_path = try std.ArrayList(u8).initCapacity(alloc, dir.len + 1 + name.len);
         defer target_path.deinit();
         try std.fmt.format(target_path.writer(), "{s}/{s}", .{ dir, name });
 
@@ -123,7 +125,7 @@ pub const ZagDep = struct {
 
                 // Entry point
                 const relative_path = if (self.entry) |entry| entry else "src/main.zig";
-                try std.fmt.format(target_path.writer(), "{s}/{s}", .{ target_path.toOwnedSlice(), relative_path });
+                try std.fmt.format(target_path.writer(), "/{s}", .{relative_path});
 
                 return std.build.Pkg{
                     .name = name,
@@ -151,7 +153,7 @@ pub const ZagDep = struct {
         }
 
         const relative_path = if (self.entry) |entry| entry else "src/main.zig";
-        try std.fmt.format(target_path.writer(), "{s}/{s}", .{ target_path.toOwnedSlice(), relative_path });
+        try std.fmt.format(target_path.writer(), "/{s}", .{relative_path});
 
         return std.build.Pkg{
             .name = name,

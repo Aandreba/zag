@@ -25,6 +25,8 @@ test "generate file" {
     defer file.deinit();
 
     const deps = try file.importDeps();
+    for (deps) |dep| std.debug.print("{s}\n", .{dep.source.path});
+
     defer {
         for (deps) |dep| file.alloc.free(dep.source.path);
         file.alloc.free(deps);
